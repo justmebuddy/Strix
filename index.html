@@ -5,69 +5,129 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>JS Vulnerability Scanner</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    .chev { transition: transform .15s; }
+    details[open] .chev { transform: rotate(90deg); }
+  </style>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center p-4">
-  <h1 class="text-2xl font-bold mb-1">GitHub JS Vulnerability Scanner</h1>
-  <p class="text-xs text-gray-400 mb-4">Static analysis runs locally in your browser. Only package names/versions are sent to OSV.dev.</p>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+  <div class="max-w-6xl mx-auto p-4 md:p-6">
 
-  <!-- Input -->
-  <div class="w-full max-w-3xl mb-4">
-    <input id="repoUrl" type="text" placeholder="https://github.com/owner/repo"
-      class="w-full p-2 rounded bg-gray-800 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-    <input id="token" type="password" placeholder="Optional GitHub token (raises API rate limit; never stored)"
-      class="mt-2 w-full p-2 rounded bg-gray-800 border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-    <button id="fetchBtn" class="mt-2 w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 p-2 rounded font-semibold">
-      Fetch &amp; Scan Repo
-    </button>
+    <!-- Header -->
+    <header class="mb-5">
+      <h1 class="text-2xl md:text-3xl font-bold">GitHub JS Vulnerability Scanner</h1>
+      <p class="text-sm text-gray-400 mt-1">Static analysis runs locally in your browser. Only package names and versions are sent to OSV.dev.</p>
+    </header>
+
+    <!-- Scan card -->
+    <section class="bg-gray-800 rounded-xl p-4 mb-5">
+      <div class="flex flex-col md:flex-row gap-2">
+        <input id="repoUrl" type="text" placeholder="https://github.com/owner/repo"
+          class="flex-1 p-2 rounded bg-gray-900 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <input id="token" type="password" placeholder="GitHub token (optional, never stored)"
+          class="md:w-72 p-2 rounded bg-gray-900 border border-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <button id="fetchBtn" class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-5 py-2 rounded font-semibold">Scan</button>
+      </div>
+      <div id="progressWrap" class="mt-3 hidden">
+        <div class="h-2 bg-gray-900 rounded overflow-hidden"><div id="bar" class="h-2 bg-blue-500 w-0 transition-all"></div></div>
+        <p id="status" class="text-xs text-gray-400 mt-1"></p>
+      </div>
+      <p id="error" class="text-sm text-red-400 mt-2 hidden"></p>
+    </section>
+
+    <!-- Home (before a scan) -->
+    <section id="home">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <div class="bg-gray-800 rounded-xl p-4"><div class="text-red-400 font-bold mb-1">Code injection &amp; XSS</div><p class="text-xs text-gray-400">AST + taint tracking from user input to eval, new Function, innerHTML, document.write, dangerouslySetInnerHTML.</p></div>
+        <div class="bg-gray-800 rounded-xl p-4"><div class="text-orange-400 font-bold mb-1">Access control</div><p class="text-xs text-gray-400">IDOR-shaped routes, missing auth on state-changing endpoints, role fields taken from the request body.</p></div>
+        <div class="bg-gray-800 rounded-xl p-4"><div class="text-yellow-400 font-bold mb-1">Secrets</div><p class="text-xs text-gray-400">OpenAI, Anthropic, Gemini, AWS, Azure, GitHub, npm, Slack, Stripe keys and high-entropy assignments. Values are masked.</p></div>
+        <div class="bg-gray-800 rounded-xl p-4"><div class="text-blue-400 font-bold mb-1">Dependencies</div><p class="text-xs text-gray-400">package-lock.json / package.json checked against the OSV vulnerability database.</p></div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="bg-gray-800 rounded-xl p-4">
+          <h2 class="font-semibold mb-2">How it works</h2>
+          <ol class="text-sm text-gray-300 space-y-1 list-decimal list-inside">
+            <li>Reads the repo tree through the GitHub API (default branch).</li>
+            <li>Downloads JS/TS files (skips node_modules, dist, minified).</li>
+            <li>Parses each file to an AST and traces user input to dangerous sinks.</li>
+            <li>Runs secret patterns and dependency checks, then scores the repo.</li>
+          </ol>
+          <p class="text-xs text-gray-500 mt-3">Findings are heuristics. Test files are down-ranked, and a finding is marked high confidence only when user input was actually traced into the sink.</p>
+        </div>
+        <div class="bg-gray-800 rounded-xl p-4">
+          <h2 class="font-semibold mb-2">Recent scans</h2>
+          <div id="recent" class="space-y-2 text-sm"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dashboard (after a scan) -->
+    <section id="dash" class="hidden">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div id="riskCard" class="bg-gray-800 rounded-xl p-4"></div>
+        <div id="donutCard" class="bg-gray-800 rounded-xl p-4 flex items-center gap-4"></div>
+        <div id="metaCard" class="bg-gray-800 rounded-xl p-4 text-sm"></div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div class="bg-gray-800 rounded-xl p-4"><h2 class="font-semibold mb-3 text-sm">Findings by category</h2><div id="catChart" class="space-y-2"></div></div>
+        <div class="bg-gray-800 rounded-xl p-4"><h2 class="font-semibold mb-3 text-sm">Riskiest files</h2><div id="fileChart" class="space-y-2"></div></div>
+      </div>
+
+      <!-- Filters -->
+      <div class="bg-gray-800 rounded-xl p-3 mb-3 flex flex-wrap items-center gap-2 text-sm">
+        <div id="chips" class="flex gap-1"></div>
+        <select id="catSel" class="bg-gray-900 border border-gray-700 rounded p-1"></select>
+        <input id="q" type="text" placeholder="Search file, rule, text…" class="flex-1 min-w-[10rem] bg-gray-900 border border-gray-700 rounded p-1 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <label class="flex items-center gap-1 text-gray-300"><input id="hideTests" type="checkbox" checked /> Hide test files</label>
+        <button id="dlHtml" class="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded">HTML report</button>
+        <button id="dlJson" class="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded">JSON</button>
+      </div>
+
+      <div id="output" class="space-y-2"></div>
+    </section>
   </div>
-
-  <!-- Progress -->
-  <div id="progressWrap" class="w-full max-w-3xl mb-4 hidden">
-    <div class="h-2 bg-gray-800 rounded overflow-hidden"><div id="bar" class="h-2 bg-blue-500 w-0 transition-all"></div></div>
-    <p id="status" class="text-xs text-gray-400 mt-1"></p>
-  </div>
-
-  <!-- Summary -->
-  <div id="summary" class="w-full max-w-3xl mb-4 hidden">
-    <div class="grid grid-cols-4 gap-2 text-center" id="cards"></div>
-    <div class="flex items-center justify-between mt-3 text-xs text-gray-400">
-      <span id="meta"></span>
-      <span class="space-x-2">
-        <button id="dlHtml" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded">Download HTML report</button>
-        <button id="dlJson" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded">Download JSON</button>
-      </span>
-    </div>
-  </div>
-
-  <!-- Output -->
-  <div id="output" class="w-full max-w-3xl space-y-2"></div>
 
   <script type="module">
-    import { scanCode, SEVERITIES } from './rules.js';
+    import { scanCode, SEVERITIES, isTestPath } from './rules.js';
     import { auditDependencies } from './deps.js';
 
     const $ = (id) => document.getElementById(id);
-    const output = $('output'), fetchBtn = $('fetchBtn');
+    const fetchBtn = $('fetchBtn');
 
-    const SEV_STYLE = {
-      CRITICAL: { bg: 'bg-red-700', badge: 'bg-red-600', hex: '#b91c1c' },
-      HIGH:     { bg: 'bg-orange-600', badge: 'bg-orange-600', hex: '#ea580c' },
-      MEDIUM:   { bg: 'bg-yellow-600', badge: 'bg-yellow-600', hex: '#ca8a04' },
-      LOW:      { bg: 'bg-blue-600', badge: 'bg-blue-600', hex: '#2563eb' },
+    const SEV = {
+      CRITICAL: { hex: '#b91c1c', badge: 'bg-red-700' },
+      HIGH:     { hex: '#ea580c', badge: 'bg-orange-600' },
+      MEDIUM:   { hex: '#ca8a04', badge: 'bg-yellow-600' },
+      LOW:      { hex: '#2563eb', badge: 'bg-blue-600' },
     };
+    const WEIGHT = { CRITICAL: 10, HIGH: 5, MEDIUM: 2, LOW: 0.5 };
 
     const CODE_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx)$/;
     const SKIP_RE = /(?:^|\/)(?:node_modules|dist|build|vendor|\.next)\/|\.min\.js$|\.d\.ts$/;
-    const MAX_FILES = 300, MAX_BYTES = 750_000, CONCURRENCY = 6;
+    const MAX_FILES = 300, MAX_BYTES = 750_000, CONCURRENCY = 6, MAX_RENDER_FILES = 100;
 
-    let state = { repo: '', results: [], filter: null, filesScanned: 0, parseFailed: 0, depNote: '', depChecked: 0 };
+    let scan = null;
+    const ui = { sev: null, cat: '', q: '', hideTests: true };
 
-    function el(tag, cls, text) {
-      const n = document.createElement(tag);
-      if (cls) n.className = cls;
-      if (text !== undefined) n.textContent = text;
-      return n;
-    }
+    /* ------------------------------------------------------------ utils */
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const emptyCounts = () => ({ CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 });
+    const countsOf = (results) => {
+      const c = emptyCounts();
+      results.forEach((r) => r.findings.forEach((f) => c[f.severity]++));
+      return c;
+    };
+    const weighted = (c) => SEVERITIES.reduce((a, s) => a + c[s] * WEIGHT[s], 0);
+    const riskScore = (c) => Math.min(100, Math.round(100 * (1 - Math.exp(-weighted(c) / 40))));
+    const grade = (n) =>
+      n >= 75 ? { label: 'Critical risk', color: '#b91c1c' } :
+      n >= 50 ? { label: 'High risk', color: '#ea580c' } :
+      n >= 25 ? { label: 'Moderate risk', color: '#ca8a04' } :
+      n > 0   ? { label: 'Low risk', color: '#2563eb' } :
+                { label: 'Clean', color: '#16a34a' };
 
     function setProgress(done, total, msg) {
       $('progressWrap').classList.remove('hidden');
@@ -75,6 +135,31 @@
       $('status').textContent = msg;
     }
 
+    /* ------------------------------------------------------ recent scans */
+    const RK = 'jsvs.recent';
+    const loadRecent = () => { try { return JSON.parse(localStorage.getItem(RK) || '[]'); } catch { return []; } };
+    function saveRecent(entry) {
+      try {
+        const list = loadRecent().filter((x) => x.repo !== entry.repo);
+        list.unshift(entry);
+        localStorage.setItem(RK, JSON.stringify(list.slice(0, 6)));
+      } catch { /* storage unavailable */ }
+    }
+    function renderRecent() {
+      const list = loadRecent();
+      $('recent').innerHTML = list.length
+        ? list.map((x) => {
+            const g = grade(x.score);
+            return `<button data-repo="${esc(x.repo)}" class="recent w-full flex items-center justify-between bg-gray-900 hover:bg-gray-700 rounded p-2 text-left">
+              <span class="break-all">${esc(x.repo)}</span>
+              <span class="text-xs px-2 py-0.5 rounded" style="background:${g.color}">${x.score} · ${esc(g.label)}</span></button>`;
+          }).join('')
+        : '<p class="text-gray-500 text-sm">No scans yet. Paste a public repo URL above.</p>';
+      document.querySelectorAll('.recent').forEach((b) =>
+        b.addEventListener('click', () => { $('repoUrl').value = `https://github.com/${b.dataset.repo}`; runScan(); }));
+    }
+
+    /* ----------------------------------------------------------- scanning */
     async function ghJson(url, token) {
       const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
       const data = await res.json();
@@ -95,36 +180,36 @@
       const owner = match[1], repo = match[2].replace(/\.git$/, '');
       const token = $('token').value.trim();
 
-      state = { repo: `${owner}/${repo}`, results: [], filter: null, filesScanned: 0, parseFailed: 0, depNote: '', depChecked: 0 };
-      output.innerHTML = '';
-      $('summary').classList.add('hidden');
+      scan = { repo: `${owner}/${repo}`, branch: '', results: [], filesScanned: 0, parseFailed: 0,
+               depNote: '', depChecked: 0, truncated: false, capped: false, at: new Date() };
+      ui.sev = null; ui.cat = ''; ui.q = ''; $('q').value = '';
 
       setProgress(0, 0, 'Resolving default branch…');
       const info = await ghJson(`https://api.github.com/repos/${owner}/${repo}`, token);
-      const branch = info.default_branch;
-      const tree = await ghJson(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, token);
-      const truncated = tree.truncated;
+      scan.branch = info.default_branch;
+      const tree = await ghJson(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(scan.branch)}?recursive=1`, token);
+      scan.truncated = !!tree.truncated;
 
-      const raw = (path) => `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path.split('/').map(encodeURIComponent).join('/')}`;
-      const fetchText = async (path) => (await fetch(raw(path))).text();
+      const raw = (p) => `https://raw.githubusercontent.com/${owner}/${repo}/${scan.branch}/${p.split('/').map(encodeURIComponent).join('/')}`;
+      const fetchText = async (p) => (await fetch(raw(p))).text();
 
       const blobs = tree.tree.filter((f) => f.type === 'blob');
-      const codeFiles = blobs.filter((f) => CODE_RE.test(f.path) && !SKIP_RE.test(f.path) && (f.size || 0) <= MAX_BYTES).slice(0, MAX_FILES);
-      if (!codeFiles.length) setProgress(0, 0, 'No JS/TS files found.');
+      const all = blobs.filter((f) => CODE_RE.test(f.path) && !SKIP_RE.test(f.path) && (f.size || 0) <= MAX_BYTES);
+      scan.capped = all.length > MAX_FILES;
+      const codeFiles = all.slice(0, MAX_FILES);
 
       let done = 0;
       await pool(codeFiles, async (file) => {
         try {
           const content = await fetchText(file.path);
           const findings = scanCode(content, file.path);
-          state.filesScanned++;
-          if (findings.parseFailed) state.parseFailed++;
-          if (findings.length) state.results.push({ path: file.path, findings });
+          scan.filesScanned++;
+          if (findings.parseFailed) scan.parseFailed++;
+          if (findings.length) scan.results.push({ path: file.path, findings, isTest: isTestPath(file.path) });
         } catch { /* skip unreadable file */ }
         setProgress(++done, codeFiles.length, `Scanning ${done}/${codeFiles.length} files…`);
       });
 
-      // Dependencies
       setProgress(codeFiles.length, codeFiles.length, 'Auditing dependencies via OSV…');
       try {
         const lock = blobs.find((f) => f.path === 'package-lock.json');
@@ -133,77 +218,154 @@
           lockText: lock ? await fetchText(lock.path) : undefined,
           pkgText: pkg ? await fetchText(pkg.path) : undefined,
         });
-        state.depNote = dep.note; state.depChecked = dep.checked;
-        if (dep.findings.length) state.results.push({ path: 'Dependencies (npm)', findings: dep.findings });
+        scan.depNote = dep.note; scan.depChecked = dep.checked;
+        if (dep.findings.length) scan.results.push({ path: 'Dependencies (npm)', findings: dep.findings, isTest: false });
       } catch (e) {
-        state.depNote = `Dependency audit failed: ${e.message}`;
+        scan.depNote = `Dependency audit failed: ${e.message}`;
       }
 
-      setProgress(1, 1, `Done${truncated ? ' (repo tree was truncated by GitHub; results are partial)' : ''}${codeFiles.length === MAX_FILES ? ` (capped at ${MAX_FILES} files)` : ''}.`);
-      render();
+      setProgress(1, 1, 'Done.');
+      const base = baseResults();
+      saveRecent({ repo: scan.repo, ts: Date.now(), score: riskScore(countsOf(base)) });
+      showDashboard();
     }
 
-    function counts() {
-      const c = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
-      state.results.forEach((r) => r.findings.forEach((f) => c[f.severity]++));
-      return c;
-    }
+    /* ------------------------------------------------------------ views */
+    const baseResults = () => scan.results.filter((r) => !(ui.hideTests && r.isTest));
 
-    function render() {
-      const c = counts();
-      const cards = $('cards');
-      cards.innerHTML = '';
-      SEVERITIES.forEach((s) => {
-        const b = el('button', `p-2 rounded ${SEV_STYLE[s].bg} ${state.filter === s ? 'ring-2 ring-white' : 'opacity-90'}`);
-        b.append(el('div', 'text-2xl font-bold', String(c[s])), el('div', 'text-xs', s));
-        b.addEventListener('click', () => { state.filter = state.filter === s ? null : s; render(); });
-        cards.appendChild(b);
+    function donut(c, textColor = '#f3f4f6', subColor = '#9ca3af') {
+      const total = SEVERITIES.reduce((a, s) => a + c[s], 0);
+      const R = 52, C = 2 * Math.PI * R;
+      let off = 0, segs = '';
+      if (!total) segs = `<circle r="${R}" cx="70" cy="70" fill="none" stroke="#374151" stroke-width="18"/>`;
+      else SEVERITIES.forEach((s) => {
+        if (!c[s]) return;
+        const len = (C * c[s]) / total;
+        segs += `<circle r="${R}" cx="70" cy="70" fill="none" stroke="${SEV[s].hex}" stroke-width="18" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"/>`;
+        off += len;
       });
-      $('meta').textContent = `${state.repo} · ${state.filesScanned} files scanned` +
-        (state.parseFailed ? ` · ${state.parseFailed} unparseable` : '') +
-        (state.depNote ? ` · deps: ${state.depChecked} checked (${state.depNote})` : '');
-      $('summary').classList.remove('hidden');
+      return `<svg viewBox="0 0 140 140" class="w-36 h-36 shrink-0" role="img" aria-label="Findings by severity">${segs}
+        <text x="70" y="70" text-anchor="middle" fill="${textColor}" font-size="26" font-weight="700">${total}</text>
+        <text x="70" y="88" text-anchor="middle" fill="${subColor}" font-size="10">findings</text></svg>`;
+    }
 
-      output.innerHTML = '';
+    function legend(c) {
+      return SEVERITIES.map((s) =>
+        `<div class="flex items-center gap-2 text-sm"><span class="w-3 h-3 rounded-sm" style="background:${SEV[s].hex}"></span><span class="w-16">${s}</span><b>${c[s]}</b></div>`).join('');
+    }
+
+    function stackedBars(rows, emptyMsg) {
+      if (!rows.length) return `<p class="text-sm text-gray-500">${emptyMsg}</p>`;
+      const max = Math.max(...rows.map((r) => r.total));
+      return rows.map((r) => {
+        const segs = SEVERITIES.filter((s) => r.counts[s]).map((s) =>
+          `<div title="${s}: ${r.counts[s]}" style="width:${(r.counts[s] / max) * 100}%;background:${SEV[s].hex}" class="h-3"></div>`).join('');
+        return `<div><div class="flex justify-between text-xs mb-0.5"><span class="truncate pr-2" title="${esc(r.label)}">${esc(r.label)}</span><span class="text-gray-400">${r.total}</span></div>
+          <div class="flex bg-gray-900 rounded overflow-hidden">${segs}</div></div>`;
+      }).join('');
+    }
+
+    function showDashboard() {
+      $('home').classList.add('hidden');
+      $('dash').classList.remove('hidden');
+      const cats = [...new Set(scan.results.flatMap((r) => r.findings.map((f) => f.category)))].sort();
+      $('catSel').innerHTML = `<option value="">All categories</option>` + cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+      renderDash();
+    }
+
+    function renderDash() {
+      const base = baseResults();
+      const c = countsOf(base);
+      const score = riskScore(c), g = grade(score);
+
+      $('riskCard').innerHTML = `
+        <div class="text-xs text-gray-400 mb-1">Risk score</div>
+        <div class="flex items-end gap-2"><span class="text-5xl font-bold" style="color:${g.color}">${score}</span><span class="text-gray-400 mb-1">/ 100</span></div>
+        <div class="h-2 bg-gray-900 rounded mt-2 overflow-hidden"><div class="h-2" style="width:${score}%;background:${g.color}"></div></div>
+        <div class="mt-2 font-semibold" style="color:${g.color}">${g.label}</div>
+        <p class="text-xs text-gray-500 mt-1">Weighted: Critical×10, High×5, Medium×2, Low×0.5.</p>`;
+
+      $('donutCard').innerHTML = donut(c) + `<div class="space-y-1">${legend(c)}</div>`;
+
+      const meta = [
+        `<div class="font-semibold break-all"><a class="text-blue-400 underline" target="_blank" rel="noopener" href="https://github.com/${esc(scan.repo)}">${esc(scan.repo)}</a></div>`,
+        `<div class="text-gray-400">Branch: ${esc(scan.branch)}</div>`,
+        `<div class="text-gray-400">${scan.filesScanned} files scanned${scan.parseFailed ? `, ${scan.parseFailed} unparseable` : ''}</div>`,
+        scan.depNote ? `<div class="text-gray-400">Deps: ${scan.depChecked} checked. ${esc(scan.depNote)}</div>` : '',
+        scan.capped ? `<div class="text-yellow-400 text-xs">Capped at ${MAX_FILES} files.</div>` : '',
+        scan.truncated ? `<div class="text-yellow-400 text-xs">GitHub truncated the tree; results are partial.</div>` : '',
+        `<div class="text-gray-500 text-xs">${esc(scan.at.toLocaleString())}</div>`,
+      ].join('');
+      $('metaCard').innerHTML = meta;
+
+      // category chart
+      const byCat = new Map();
+      base.forEach((r) => r.findings.forEach((f) => {
+        if (!byCat.has(f.category)) byCat.set(f.category, emptyCounts());
+        byCat.get(f.category)[f.severity]++;
+      }));
+      const catRows = [...byCat].map(([label, counts]) => ({ label, counts, total: SEVERITIES.reduce((a, s) => a + counts[s], 0), w: weighted(counts) }))
+        .sort((a, b) => b.w - a.w);
+      $('catChart').innerHTML = stackedBars(catRows, 'No findings.');
+
+      // top files chart
+      const fileRows = base.map((r) => { const counts = countsOf([r]); return { label: r.path, counts, total: r.findings.length, w: weighted(counts) }; })
+        .sort((a, b) => b.w - a.w).slice(0, 6);
+      $('fileChart').innerHTML = stackedBars(fileRows, 'No findings.');
+
+      // severity chips
+      $('chips').innerHTML = SEVERITIES.map((s) =>
+        `<button data-sev="${s}" class="chip px-2 py-1 rounded text-xs font-bold ${ui.sev === s ? 'ring-2 ring-white' : 'opacity-80'}" style="background:${SEV[s].hex}">${s} ${c[s]}</button>`).join('');
+      document.querySelectorAll('.chip').forEach((b) =>
+        b.addEventListener('click', () => { ui.sev = ui.sev === b.dataset.sev ? null : b.dataset.sev; renderDash(); }));
+
+      renderList(base);
+    }
+
+    function renderList(base = baseResults()) {
+      const q = ui.q.toLowerCase();
       const rank = (r) => Math.min(...r.findings.map((f) => SEVERITIES.indexOf(f.severity)));
-      const visible = state.results
-        .map((r) => ({ ...r, findings: state.filter ? r.findings.filter((f) => f.severity === state.filter) : r.findings }))
+      const rows = base
+        .map((r) => ({
+          ...r,
+          findings: r.findings.filter((f) =>
+            (!ui.sev || f.severity === ui.sev) &&
+            (!ui.cat || f.category === ui.cat) &&
+            (!q || `${r.path} ${f.name} ${f.category} ${f.description}`.toLowerCase().includes(q))),
+        }))
         .filter((r) => r.findings.length)
         .sort((a, b) => rank(a) - rank(b));
 
-      if (!visible.length) {
-        output.appendChild(el('div', 'p-3 bg-green-700 rounded', state.results.length ? 'No findings at this severity.' : 'No issues detected.'));
+      const out = $('output');
+      if (!rows.length) {
+        out.innerHTML = `<div class="p-3 bg-green-900/50 rounded">${scan.results.length ? 'No findings match the current filters.' : 'No issues detected.'}</div>`;
         return;
       }
-      visible.forEach((r) => {
-        const d = el('details', 'bg-gray-800 rounded');
-        if (rank(r) <= 1) d.open = true;
-        const sum = el('summary', 'cursor-pointer p-2 font-bold flex justify-between');
-        sum.append(el('span', 'break-all', r.path), el('span', 'text-xs text-gray-400', `${r.findings.length} finding(s)`));
-        d.appendChild(sum);
-        const body = el('div', 'p-2 space-y-2');
-        r.findings.forEach((f) => {
-          const row = el('div', 'p-2 rounded bg-gray-700');
-          const head = el('div', 'flex items-center gap-2 text-sm');
-          head.append(
-            el('span', `px-2 py-0.5 rounded text-xs font-bold ${SEV_STYLE[f.severity].badge}`, f.severity),
-            el('span', 'font-semibold', f.name),
-            el('span', 'text-xs text-gray-400', `${f.category}${f.line ? ` · line ${f.line}` : ''}`)
-          );
-          row.appendChild(head);
-          row.appendChild(el('p', 'text-xs mt-1 text-gray-200', f.description));
-          if (f.snippet) row.appendChild(el('pre', 'mt-1 text-xs bg-gray-900 p-1 rounded overflow-auto', f.snippet));
-          if (f.link) { const a = el('a', 'text-xs text-blue-400 underline', f.link); a.href = f.link; a.target = '_blank'; a.rel = 'noopener'; row.appendChild(a); }
-          body.appendChild(row);
-        });
-        d.appendChild(body);
-        output.appendChild(d);
-      });
+      out.innerHTML = rows.slice(0, MAX_RENDER_FILES).map((r) => `
+        <details class="bg-gray-800 rounded"${rank(r) <= 1 ? ' open' : ''}>
+          <summary class="cursor-pointer p-2 flex items-center justify-between gap-2">
+            <span class="flex items-center gap-2 min-w-0"><span class="chev text-gray-500">▸</span><span class="font-semibold break-all">${esc(r.path)}</span>${r.isTest ? '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">test</span>' : ''}</span>
+            <span class="text-xs text-gray-400 shrink-0">${r.findings.length} finding(s)</span>
+          </summary>
+          <div class="p-2 pt-0 space-y-2">
+            ${r.findings.map((f) => `
+              <div class="p-2 rounded bg-gray-700">
+                <div class="flex flex-wrap items-center gap-2 text-sm">
+                  <span class="px-2 py-0.5 rounded text-xs font-bold ${SEV[f.severity].badge}">${f.severity}</span>
+                  <span class="font-semibold">${esc(f.name)}</span>
+                  <span class="text-xs text-gray-400">${esc(f.category)}${f.line ? ` · line ${f.line}` : ''}</span>
+                  ${f.confidence ? `<span class="text-xs px-1.5 py-0.5 rounded ${f.confidence === 'high' ? 'bg-red-900 text-red-200' : 'bg-gray-600 text-gray-300'}">${f.confidence} confidence</span>` : ''}
+                </div>
+                <p class="text-xs mt-1 text-gray-200">${esc(f.description)}</p>
+                ${f.snippet ? `<pre class="mt-1 text-xs bg-gray-900 p-1 rounded overflow-auto">${esc(f.snippet)}</pre>` : ''}
+                ${f.link ? `<a class="text-xs text-blue-400 underline" target="_blank" rel="noopener" href="${esc(f.link)}">${esc(f.link)}</a>` : ''}
+              </div>`).join('')}
+          </div>
+        </details>`).join('') +
+        (rows.length > MAX_RENDER_FILES ? `<p class="text-xs text-gray-500 p-2">Showing the ${MAX_RENDER_FILES} riskiest of ${rows.length} files. Narrow with filters or download the JSON.</p>` : '');
     }
 
-    /* ---------- reports ---------- */
-    const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-
+    /* ---------------------------------------------------------- reports */
     function download(name, text, type) {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([text], { type }));
@@ -212,29 +374,41 @@
     }
 
     function buildReport() {
-      const c = counts();
-      const rows = state.results.map((r) =>
-        `<h3>${esc(r.path)}</h3>` + r.findings.map((f) =>
-          `<div class="f"><span class="b" style="background:${SEV_STYLE[f.severity].hex}">${f.severity}</span> <b>${esc(f.name)}</b> <small>${esc(f.category)}${f.line ? ' · line ' + f.line : ''}</small><p>${esc(f.description)}</p>${f.snippet ? `<pre>${esc(f.snippet)}</pre>` : ''}</div>`
-        ).join('')
-      ).join('');
-      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Security report — ${esc(state.repo)}</title>
-<style>body{font:14px system-ui;max-width:900px;margin:2rem auto;padding:0 1rem;color:#111}.b{color:#fff;padding:1px 8px;border-radius:4px;font-size:12px}.f{border:1px solid #ddd;border-radius:6px;padding:8px;margin:6px 0}pre{background:#f3f4f6;padding:6px;overflow:auto}small{color:#666}@media print{.f{break-inside:avoid}}</style></head><body>
-<h1>Security report: ${esc(state.repo)}</h1><p>${new Date().toISOString()} · ${state.filesScanned} files scanned · Critical ${c.CRITICAL}, High ${c.HIGH}, Medium ${c.MEDIUM}, Low ${c.LOW}</p>
-<p><small>Heuristic static analysis; findings need manual verification. Use your browser's Print → Save as PDF for a PDF copy.</small></p>${rows || '<p>No issues detected.</p>'}</body></html>`;
+      const base = baseResults();
+      const c = countsOf(base), score = riskScore(c), g = grade(score);
+      const body = base.map((r) => `<h3>${esc(r.path)}</h3>` + r.findings.map((f) =>
+        `<div class="f"><span class="b" style="background:${SEV[f.severity].hex}">${f.severity}</span> <b>${esc(f.name)}</b> <small>${esc(f.category)}${f.line ? ' · line ' + f.line : ''}${f.confidence ? ' · ' + f.confidence + ' confidence' : ''}</small><p>${esc(f.description)}</p>${f.snippet ? `<pre>${esc(f.snippet)}</pre>` : ''}</div>`).join('')).join('');
+      return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Security report: ${esc(scan.repo)}</title>
+<style>body{font:14px system-ui;max-width:900px;margin:2rem auto;padding:0 1rem;color:#111}.b{color:#fff;padding:1px 8px;border-radius:4px;font-size:12px}.f{border:1px solid #ddd;border-radius:6px;padding:8px;margin:6px 0}pre{background:#f3f4f6;padding:6px;overflow:auto}small{color:#666}.top{display:flex;gap:24px;align-items:center}@media print{.f{break-inside:avoid}}</style></head><body>
+<h1>Security report: ${esc(scan.repo)}</h1>
+<div class="top">${donut(c, '#111', '#666')}<div><div style="font-size:40px;font-weight:700;color:${g.color}">${score}<span style="font-size:16px;color:#666"> / 100</span></div><div style="color:${g.color};font-weight:600">${g.label}</div>
+<div>${SEVERITIES.map((s) => `<span class="b" style="background:${SEV[s].hex}">${s} ${c[s]}</span>`).join(' ')}</div></div></div>
+<p><small>${esc(scan.at.toISOString())} · ${scan.filesScanned} files scanned · branch ${esc(scan.branch)}${ui.hideTests ? ' · test files excluded' : ''}. Heuristic static analysis; verify findings manually. Print to PDF from your browser if you need a PDF.</small></p>
+${body || '<p>No issues detected.</p>'}</body></html>`;
     }
 
-    $('dlHtml').addEventListener('click', () => download(`report-${state.repo.replace('/', '_')}.html`, buildReport(), 'text/html'));
-    $('dlJson').addEventListener('click', () => download(`report-${state.repo.replace('/', '_')}.json`, JSON.stringify(state.results, null, 2), 'application/json'));
-
-    fetchBtn.addEventListener('click', async () => {
+    /* ------------------------------------------------------------ events */
+    async function runScan() {
       const url = $('repoUrl').value.trim();
       if (!url) return;
       fetchBtn.disabled = true;
+      $('error').classList.add('hidden');
       try { await scanRepo(url); }
-      catch (err) { output.innerHTML = ''; output.appendChild(el('p', 'text-red-500', `Error: ${err.message}`)); }
-      finally { fetchBtn.disabled = false; }
-    });
+      catch (err) {
+        $('error').textContent = `Error: ${err.message}`;
+        $('error').classList.remove('hidden');
+      } finally { fetchBtn.disabled = false; }
+    }
+
+    fetchBtn.addEventListener('click', runScan);
+    $('repoUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') runScan(); });
+    $('catSel').addEventListener('change', (e) => { ui.cat = e.target.value; renderList(); });
+    $('q').addEventListener('input', (e) => { ui.q = e.target.value.trim(); renderList(); });
+    $('hideTests').addEventListener('change', (e) => { ui.hideTests = e.target.checked; renderDash(); });
+    $('dlHtml').addEventListener('click', () => download(`report-${scan.repo.replace('/', '_')}.html`, buildReport(), 'text/html'));
+    $('dlJson').addEventListener('click', () => download(`report-${scan.repo.replace('/', '_')}.json`, JSON.stringify(scan.results, null, 2), 'application/json'));
+
+    renderRecent();
   </script>
 </body>
 </html>
