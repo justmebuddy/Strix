@@ -4,6 +4,11 @@ import { parse } from 'https://esm.sh/@babel/parser@7';
 
 export const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
+// Test / mock / fixture / story files are not shipped to production, so findings there are down-ranked.
+export const isTestPath = (p = '') =>
+  /(?:^|\/)(?:__tests__|__mocks__|tests?|spec|e2e|cypress|fixtures?|stories)\//i.test(p) ||
+  /\.(?:test|spec|stories)\.[cm]?[jt]sx?$/i.test(p);
+
 /* ---------------------------------------------------------------- helpers */
 
 function lineOf(code, index) {
@@ -150,12 +155,14 @@ export function scanAST(code, path = '') {
     return identsOf(node).some((n) => tainted.has(n));
   };
 
+  // confidence: 'high' only when we actually traced user input into the sink.
   const add = (node, category, name, severity, description) =>
     findings.push({
       category,
       name,
       severity,
       description,
+      confidence: /^User-controlled|flows into|reaches/i.test(description) ? 'high' : 'low',
       line: node.loc ? node.loc.start.line : lineOf(code, node.start),
     });
 
@@ -204,8 +211,9 @@ export function scanAST(code, path = '') {
       case 'NewExpression': {
         if (node.callee.type === 'Identifier' && node.callee.name === 'Function') {
           const t = node.arguments.some(isTainted);
-          add(node, 'Code Injection', 'new Function()', t ? 'CRITICAL' : 'HIGH',
-            t ? 'User-controlled input reaches new Function(): remote code execution.' : 'new Function() compiles strings to code, equivalent to eval().');
+          add(node, 'Code Injection', 'new Function()', t ? 'CRITICAL' : 'MEDIUM',
+            t ? 'User-controlled input reaches new Function(): remote code execution.'
+              : 'new Function() compiles a string to code. No user input was traced into it in this file, so it is only risky if that string can come from an untrusted source.');
         }
         break;
       }
@@ -225,8 +233,9 @@ export function scanAST(code, path = '') {
 
         if (callee.type === 'Identifier' && name === 'eval') {
           const t = args.some(isTainted);
-          add(node, 'Code Injection', 'eval()', t ? 'CRITICAL' : 'HIGH',
-            t ? 'User-controlled input reaches eval(): remote code execution.' : 'eval() executes arbitrary strings as code. Replace with safe parsing.');
+          add(node, 'Code Injection', 'eval()', t ? 'CRITICAL' : 'MEDIUM',
+            t ? 'User-controlled input reaches eval(): remote code execution.'
+              : 'eval() executes a string as code. No user input was traced into it in this file, but it is fragile; prefer safe parsing.');
         }
 
         if (callee.type === 'Identifier' && (name === 'setTimeout' || name === 'setInterval') && args[0] &&
@@ -291,6 +300,8 @@ export function scanAST(code, path = '') {
 export function scanCode(content, path = '') {
   const { findings: astFindings, parsed } = scanAST(content, path);
   const all = [...astFindings, ...scanSecrets(content)];
+  const isTest = isTestPath(path);
+  const oneLower = (s) => SEVERITIES[Math.min(SEVERITIES.indexOf(s) + 1, SEVERITIES.length - 1)];
 
   const seen = new Set();
   const result = [];
@@ -300,6 +311,13 @@ export function scanCode(content, path = '') {
     seen.add(key);
     if (f.snippet === null) f.snippet = ''; // never echo secrets
     else if (f.snippet === undefined) f.snippet = lineText(content, f.line);
+    if (f.confidence === undefined) f.confidence = f.category === 'Secret' ? 'high' : 'low';
+    if (isTest) {
+      f.context = 'test';
+      f.severity = f.category === 'Secret' ? oneLower(f.severity) : 'LOW';
+      f.confidence = 'low';
+      f.description += ' (Test file: usually not production code.)';
+    }
     result.push(f);
   }
   result.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) || a.line - b.line);
